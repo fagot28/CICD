@@ -1,0 +1,22 @@
+- hosts: wildfly
+  gather_facts: no
+  tasks:
+    - name: view applications list
+      command: /opt/wildfly/bin/jboss-cli.sh --connect controller={{ ansible_ssh_host }} --command='deployment-info --name={{ APPLICATION }}* --server-group={{ SERVER }}'
+      register: info_before
+    - debug: var=info_before.stdout_lines
+
+    - name: deploy new version application from nexus repository to content repository
+      command: /opt/wildfly/bin/jboss-cli.sh --connect controller={{ ansible_ssh_host }} --command='deploy --name={{ APPLICATION }}_{{ VERSION }}.war --runtime-name={{ APPLICATION }}.war --url=https://nexus.admhmao.ru/repository/deployments/{{ SERVER }}/{{ APPLICATION }}/{{ APPLICATION }}_{{ VERSION }}.war --disabled'
+
+    - name: undeploy all application with name APPLICATION
+      command: /opt/wildfly/bin/jboss-cli.sh --connect controller={{ ansible_ssh_host }} --command='undeploy --name={{ APPLICATION }}_* --all-relevant-server-groups --keep-content'
+      ignore_errors: yes
+
+    - name: deploy new application from content repository
+      command: /opt/wildfly/bin/jboss-cli.sh --connect controller={{ ansible_ssh_host }} --command='deploy --name={{ APPLICATION }}_{{ VERSION }}.war --server-groups={{ SERVER }}'
+
+    - name: view applications list
+      command: /opt/wildfly/bin/jboss-cli.sh --connect controller={{ ansible_ssh_host }} --command='deployment-info --name={{ APPLICATION }}* --server-group={{ SERVER }}'
+      register: info_after
+    - debug: var=info_after.stdout_lines

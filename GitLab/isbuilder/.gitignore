@@ -1,0 +1,12 @@
+.idea/
+**/*.iml
+**/target/*
+**/.project
+**/.settings/*
+**/.classpath
+**/.tern-project
+**/.externalToolBuilders/*
+*/.gitignore
+/.metadata/
+*.orig
+*.cmd

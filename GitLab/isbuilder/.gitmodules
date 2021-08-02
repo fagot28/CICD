@@ -1,0 +1,96 @@
+[submodule "isb-client"]
+	path = isb-client
+	url = ../isb-client
+[submodule "platform-client"]
+	path = platform-client
+	url = ../platform-client
+[submodule "kc-theme"]
+	path = kc-theme
+	url = ../kc-theme
+[submodule "access-token"]
+	path = access-token
+	url = ../access-token
+[submodule "accounts"]
+	path = accounts
+	url = ../accounts
+[submodule "audit"]
+	path = audit
+	url = ../audit
+[submodule "gateway"]
+	path = gateway
+	url = ../gateway
+[submodule "geocoder"]
+	path = geocoder
+	url = ../geocoder
+[submodule "geoserver-custom-crs"]
+	path = geoserver-custom-crs
+	url = ../geoserver-custom-crs
+[submodule "gp-plugins"]
+	path = gp-plugins
+	url = ../gp-plugins
+[submodule "gp-plugins-api"]
+	path = gp-plugins-api
+	url = ../gp-plugins-api
+[submodule "gpzu"]
+	path = gpzu
+	url = ../gpzu
+[submodule "kafka-support"]
+	path = kafka-support
+	url = ../kafka-support
+[submodule "license"]
+	path = license
+	url = ../license
+[submodule "mail-server"]
+	path = mail-server
+	url = ../mail-server
+[submodule "mobile"]
+	path = mobile
+	url = ../mobile
+[submodule "platform-gateway"]
+	path = platform-gateway
+	url = ../platform-gateway
+[submodule "projection"]
+	path = projection
+	url = ../projection
+[submodule "raster"]
+	path = raster
+	url = ../raster
+[submodule "raster-api"]
+	path = raster-api
+	url = ../raster-api
+[submodule "rest-api"]
+	path = rest-api
+	url = ../rest-api
+[submodule "sheduler"]
+	path = scheduler
+	url = ../scheduler
+[submodule "sensors"]
+	path = sensors
+	url = ../sensors
+[submodule "storage"]
+	path = storage
+	url = ../storage
+[submodule "storage-api"]
+	path = storage-api
+	url = ../storage-api
+[submodule "tenants"]
+	path = tenants
+	url = ../tenants
+[submodule "wfs-server"]
+	path = wfs-server
+	url = ../wfs-server
+[submodule "ws-entry"]
+	path = ws-entry
+	url = ../ws-entry
+[submodule "common"]
+	path = common
+	url = ../common
+[submodule "core"]
+	path = core
+	url = ../core
+[submodule "core-client"]
+	path = core-client
+	url = ../core-client
+[submodule "keycloak-esia-provider"]
+	path = keycloak-esia-provider
+	url = ../keycloak-esia-provider

@@ -1,0 +1,68 @@
+stages:
+  - build-docker-image
+  - build
+  - deploy
+  - notify  
+   
+before_script:
+  - export
+
+build:
+  image: $CI_REGISTRY/fadeev/templateci:latest
+  stage: build
+  script:
+    - mvn --batch-mode clean install
+  artifacts:
+    expire_in: 5 day
+    paths:
+      - "target/WebServiceDeloTisNew-0.1.war"
+
+production:
+  stage: deploy
+  script:     
+  # - 'which ssh-agent || ( apt-get update -y && apt-get install openssh-client -y )'
+    - eval $(ssh-agent -s)
+    - mkdir -p ~/.ssh
+    - echo "${SSH_PRIVATE_KEY}" | tr -d ' ' | base64 -d > private.ssh_key
+    - chmod 600 private.ssh_key
+    - cat private.ssh_key
+    - ssh-add private.ssh_key
+    - ssh-keyscan -H 'dkrtech1.technocom.tech' >> ~/.ssh/known_hosts
+    - ssh-keyscan dkrtech1.technocom.tech | sort -u - ~/.ssh/known_hosts -o ~/.ssh/known_hosts
+    - '[[ -f /.dockerinit ]] && echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config'
+    
+    - scp target/WebServiceDeloTisNew-0.1.war tech@$WILDFLY:$DEPLOYMENTS
+
+    - sed -i 's/dl-cdn.alpinelinux.org/mirrors.ustc.edu.cn/g' /etc/apk/repositories
+    - apk add curl
+    - sh .ci-notify.sh #deploy success
+  only:
+    - master  
+
+notify_error:
+  stage: notify
+  script:
+    - sed -i 's/dl-cdn.alpinelinux.org/mirrors.ustc.edu.cn/g' /etc/apk/repositories # решение проблемы с fetch apk
+    - apk add curl
+
+    - sh .ci-notify.sh
+  when: on_failure #deploy fail      
+
+build-docker-image:
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_DRIVER: overlay2
+    DOCKER_TLS_CERTDIR: ""
+  services:
+    - docker:dind
+  stage: build
+  image: "docker:latest"
+  script:
+    - cd ..
+    - wget -O Dockerfile https://gitlab.technocom.tech/fadeev/TemplateCI/-/raw/master/Dockerfile-mvn
+    - cp -r TemplateCI src
+    - cp TemplateCI/settings.xml settings.xml
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker build -t $CI_REGISTRY/fadeev/templateci:latest .
+    - docker push $CI_REGISTRY/fadeev/templateci:latest
+  when: manual

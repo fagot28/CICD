@@ -1,0 +1,183 @@
+pipeline {
+  agent {
+    label "master"
+  }
+
+  environment {
+    APPLICATION = 'archive'
+  }
+
+  stages {
+    stage('Setup parameters') {
+        steps {
+            script {
+                properties([
+                    parameters([
+                        gitParameter(
+                            name: 'GIT_BRANCH',
+                            type: 'PT_BRANCH',
+                            defaultValue: 'master'
+                        ),
+                        choice(
+                            choices: ['demo_server', 'demo_server'],
+                            name: 'BUILDPROFILE',
+                            description: 'описание'
+                        ),
+                        choice(
+                            choices: ['SLHWL', 'TIS-WEBLOGIC'],
+                            name: 'DEPLOYMENT',
+                            description: ' SLHWL - deploy на weblogic в технокоме\n TIS-WEBLOGIC - deploy на weblogic в ТИС'
+                        ),
+                        choice(
+                            choices: ['slh_server', 'slh_public'],
+                            name: 'SERVER',
+                            description: 'Выбор сервера для деплоя приложения на SLH_Domain в ТЕХНОКОМЕ'
+                        ),
+                        choice(
+                            choices: ['unr_Cluster', 'gis_Cluster', 'tst_Cluster', 'ms_Cluster', 'ws_Cluster'],
+                            name: 'CLUSTER',
+                            description: 'Выбор кластера для деплоя приложения на UNR_Domain в ТИС'
+                        ),
+                        string(
+                            defaultValue: '2021-07-01_0000',
+                            name: 'VERSION_UNDEPLOY',
+                            trim: true,
+                            description: 'Версия приложения для удаления с сервера'
+                        )
+                    ])
+                ])
+            }
+        }
+    }
+
+
+    stage('Clone from Gogs') {
+      agent {
+        label "master"
+      }
+      steps {
+          checkout([
+              $class: 'GitSCM',
+              branches: [[name: "${GIT_BRANCH}"]],
+              doGenerateSubmoduleConfigurations: false,
+              extensions: [],
+              gitTool: 'Default',
+              submoduleCfg: [],
+              userRemoteConfigs: [[url: 'git@gogs.technocom.tech:ServerSoftware/archive.git', credentialsId: 'gogs-jenkins']]
+            ])
+       }
+    }
+
+    stage('Building app') {
+        agent {
+            docker {
+                image 'jenkins/maven:3.6.3-jdk-8'
+                registryUrl 'https://artifactory.technocom.tech'
+                registryCredentialsId 'artifactory'
+                args '-v $WORKSPACE:/root/src -v $WORKSPACE/target:/root/src/target -u 0:0'
+                label "master"
+            }
+	    }
+      steps {
+        withEnv(["BUILDPROFILE=${params.BUILDPROFILE}"]) {
+            sh '''
+                ls -la
+                test='--define "skipTests=true"'
+                profiles="--activate-profiles ${BUILDPROFILE},production,war_naming"
+                mvn clean package $test $profiles -N help:effective-pom -Doutput=target/pom-effective.xml
+                BUILD=$(awk -F '[<>]' '/Implementation-Built/{print $3;exit;}' target/pom-effective.xml)
+                echo "BUILD=$BUILD" >> extravars.properties
+            '''
+        }
+        script {
+            env.VERSION = readMavenPom().getVersion()
+            pom = readMavenPom(file: 'target/pom-effective.xml')
+            projectArtifactId = pom.getArtifactId()
+            projectGroupId = pom.getGroupId()
+            projectVersion = pom.getVersion()
+            projectName = pom.getName()
+            def props = readProperties file: 'extravars.properties'
+            env.BUILD = props.BUILD
+        }
+        echo("VERSION=${VERSION}")
+        echo "Building ${projectName}:${projectVersion}"
+        echo "BUILD ${BUILD}"
+      }
+    }
+
+    stage('Деплой на вебложик в ТИС') {
+      agent {
+          label "master"
+      }
+      when {
+          expression { params.DEPLOYMENT == 'TIS-WEBLOGIC' }
+      }
+      environment {
+        HOST = 'unoln3.hmao.ugra'
+      }
+      steps {
+          sshagent(credentials: ['SSH-TIS-KEY']) {
+            withEnv(["HOST=${env.HOST}", "CLUSTER=${params.CLUSTER}", "APPLICATION=${env.APPLICATION}", "VERSION=${env.BUILD}"]) {
+              withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId: 'WEBLOGIC_HMAO', passwordVariable: 'PASSWORD', usernameVariable: 'USERNAME']]) {
+                sh("""
+                  ssh-keyscan -H '${HOST}' >> ~/.ssh/known_hosts
+                  ssh-keyscan ${HOST} | sort -u - ~/.ssh/known_hosts -o ~/.ssh/known_hosts
+
+                  scp $WORKSPACE/weblogic-app/${APPLICATION}.war fga@${HOST}:D:/Deployments/${CLUSTER}
+
+                  ssh fga@${env.SERVER} 'cmd \\c' << EOF
+                  set CLASSPATH=C:\\Apps\\WLS\\wlserver\\server\\lib\\weblogic.jar
+                  java weblogic.Deployer -adminurl t3://${HOST}:7001 -username $USERNAME -password $PASSWORD -name ${APPLICATION} -targets ${CLUSTER} -undeploy -appversion 1.0.2
+                  java weblogic.Deployer -adminurl t3://${HOST}:7001 -username $USERNAME -password $PASSWORD -name ${APPLICATION} -targets ${CLUSTER} -stage -deploy D:\\Deployments\\${CLUSTER}\\${APPLICATION}.war -appversion 1.0.4
+                  exit
+                  EOF
+                """)
+              }
+            }
+          }
+        }
+    }
+
+
+    stage('Deployment app on weblogic SLHWL') {
+     agent {
+         label "master"
+     }
+     when {
+         expression { params.DEPLOYMENT == 'SLHWL' }
+     }
+     environment {
+       HOST = 'slhwl.technocom.tech'
+     }
+     steps {
+         sshagent(credentials: ['SLHWL']) {
+           withEnv(["SERVER=${param.SERVER}", "HOST=${env.HOST}", "APPLICATION=${env.APPLICATION}", "VERSION=${env.BUILD}", "VERSION_UNDEPLOY=${param.VERSION_UNDEPLOY}"]) {
+             withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId: 'WEBLOGIC_SLHWL', passwordVariable: 'PASSWORD', usernameVariable: 'USERNAME']]) {
+               sh("""
+                 ssh-keyscan -H '${HOST}' >> ~/.ssh/known_hosts
+                 ssh-keyscan ${HOST} | sort -u - ~/.ssh/known_hosts -o ~/.ssh/known_hosts
+
+                 scp $WORKSPACE/weblogic-app/${APPLICATION}.war fga@${HOST}:D:/Deployments/${SERVER}
+
+                 ssh fga@${env.SERVER} 'cmd \\c' << EOF
+                 set CLASSPATH=C:\\Apps\\WLS\\wlserver\\server\\lib\\weblogic.jar
+                 java weblogic.Deployer -adminurl t3://${HOST}:7001 -username $USERNAME -password $PASSWORD -name ${APPLICATION} -targets ${SERVER} -undeploy -appversion ${VERSION_UNDEPLOY}
+                 java weblogic.Deployer -adminurl t3://${HOST}:7001 -username $USERNAME -password $PASSWORD -name ${APPLICATION} -targets ${SERVER} -stage -deploy D:\\Deployments\\${SERVER}\\${APPLICATION}.war -appversion ${VERSION}
+                 exit
+                 EOF
+               """)
+             }
+           }
+         }
+      }
+    }
+
+ }
+
+ post {
+    always {
+       deleteDir() // удаление рабочего каталога
+    }
+ }
+
+}

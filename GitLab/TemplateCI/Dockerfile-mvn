@@ -1,0 +1,9 @@
+FROM maven:3.6.3-jdk-8 as populate_cache_stage
+COPY src /root/src
+WORKDIR /root/src
+COPY settings.xml /root/.m2/
+RUN mvn -B clean install
+
+FROM maven:3.6.3-jdk-8
+COPY --from=populate_cache_stage /root/.m2 /root/.m2
+WORKDIR /root/src

@@ -1,0 +1,71 @@
+stages:
+  - build-cache-image # manual
+  - build
+  - build-docker-image
+  # - deploy
+  # - notify
+
+before_script:
+  - export
+
+# ----- Сборка приложения ----- #
+build:
+  image: $CI_REGISTRY/sogis/isbuilder:cache
+  stage: build
+  script:
+    - mvn --batch-mode package -pl access-token -am -DskipTests=true
+  artifacts:
+    expire_in: 5 day
+    paths:
+      - "target/access-token*.jar"
+
+# ----- Сборка приложения в контейнер ----- #
+build-docker-image:
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_DRIVER: overlay2
+    DOCKER_TLS_CERTDIR: ""
+  services:
+    - docker:dind
+  stage: build
+  image: "docker:latest"
+  script:
+    - cd ..
+    - cp isbuilder/docker/Dockerfile-build Dockerfile
+    - cat Dockerfile
+    - ls $CI_PROJECT_DIR/access-token
+    - cp $CI_PROJECT_DIR/access-token/target/access-token*.jar .
+    - docker login -u $CI_ARTIFACTORY_USER -p $CI_ARTIFACTORY_PASSWORD $CI_ARTIFACTORY
+    - docker build -t $CI_ARTIFACTORY/sogis/access-token:latest .
+    - docker push $CI_ARTIFACTORY/sogis/access-token:latest
+
+# ----- Отправка уведомления ----- #
+# notify_error:
+#   stage: notify
+#   script:
+#     - sed -i 's/dl-cdn.alpinelinux.org/mirrors.ustc.edu.cn/g' /etc/apk/repositories # решение проблемы с fetch apk
+#     - apk add curl
+#     - sh .ci-notify.sh
+#   when: on_failure # deploy fail
+
+# ----- Создание кеш контейнера ----- #
+build-cache-image:
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_DRIVER: overlay2
+    DOCKER_TLS_CERTDIR: ""
+  services:
+    - docker:dind
+  stage: build
+  image: "docker:latest"
+  script:
+    - cd ..
+    - cp isbuilder/docker/Dockerfile-mvn Dockerfile
+    - cat Dockerfile
+    - cp -r isbuilder src
+    - cp isbuilder/settings.xml settings.xml
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker build -t $CI_REGISTRY/sogis/isbuilder:cache .
+    - docker push $CI_REGISTRY/sogis/isbuilder:cache
+  when: manual

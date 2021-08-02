@@ -1,0 +1,287 @@
+pipeline {
+  agent { label "master" }
+  environment {
+        APPLICATION = 'uslugi-api'
+  }
+  stages {
+    stage('УСТАНОВКА ПАРАМЕТРОВ') {
+      steps {
+        script {
+          properties([
+              parameters([
+                  gitParameter(
+                      name: 'GIT_BRANCH',
+                      type: 'PT_BRANCH',
+                      defaultValue: 'master'
+                  ),
+                  choice(
+                      choices: ['uslugi_hmao', 'tis_tmn_demo', 'tis_hmao_unoln'],
+                      name: 'BUILDPROFILE',
+                      description: 'Профиль для сборки проекта\n'
+                  ),
+                  choice(
+                      choices: ['SLHWL', 'TIS-WEBLOGIC', 'TIS-WILDFLY'],
+                      name: 'DEPLOYMENT',
+                      description: ' SLHWL - деплой на weblogic в технокоме\n TIS-WEBLOGIC - деплой на weblogic в ТИС\n DOMAIN-TIS-NEXUS - делой на wildfly в ТИС из nexus\n'
+                  ),
+                  choice(
+                      choices: ['slh_server', 'slh_public'],
+                      name: 'SERVER',
+                      description: 'Выбор сервера для деплоя приложения на SLH_Domain в ТЕХНОКОМЕ\n'
+                  ),
+                  choice(
+                      choices: ['unr_Cluster', 'gis_Cluster', 'tst_Cluster', 'ms_Cluster', 'ws_Cluster'],
+                      name: 'CLUSTER',
+                      description: 'Выбор кластера для деплоя приложения на UNR_Domain в ТИС\n'
+                  ),
+                  choice(
+                      choices: ['APP', 'TST', 'GIS', 'SVC', 'ALL'],
+                      name: 'GROUP',
+                      description: 'Выбор группы для деплоя на сервере WildFly\n'
+                  ),
+                  string(
+                      defaultValue: '2021-07-01_0000',
+                      name: 'VERSION_UNDEPLOY',
+                      trim: true,
+                      description: 'Версия приложения для удаления с сервера, обязательный параметр для веблоджик'
+                  ),
+                  booleanParam(
+                    defaultValue: false,
+                    name: 'DELETE_ARTIFACT',
+                    description: 'Удалить артефакт VERSION_UNDEPLOY с файловой системы или репозитория артефактов\n для вебложик это версия с Retired'
+                  )
+              ])
+            ])
+          }
+       }
+    }
+
+
+    stage('КЛОНИРОВАНИЕ ИЗ GOGS') {
+      agent { label "master" }
+      steps {
+          checkout([
+              $class: 'GitSCM',
+              branches: [[name: "${GIT_BRANCH}"]],
+              doGenerateSubmoduleConfigurations: false,
+              extensions: [],
+              gitTool: 'Default',
+              submoduleCfg: [],
+              userRemoteConfigs: [[url: 'git@gogs.technocom.tech:ServerSoftware/eservices-api.git', credentialsId: 'gogs-jenkins']]
+            ])
+       }
+    }
+
+    stage('СБОРКА ПРИЛОЖЕНИЯ') {
+      agent {
+        docker {
+          image 'jenkins/maven:3.6.3-jdk-8'
+          registryUrl 'https://artifactory.technocom.tech'
+          registryCredentialsId 'artifactory'
+          args '-v $WORKSPACE:/root/src -v $WORKSPACE/target:/root/src/target -u 0:0'
+          label "master"
+        }
+	    }
+      steps {
+        withEnv(["BUILDPROFILE=${params.BUILDPROFILE}"]) {
+            sh '''
+                ls -la
+                test='--define "skipTests=true"'
+                profiles="--activate-profiles ${BUILDPROFILE},war_naming2"
+                mvn clean package $test $profiles -N help:effective-pom -Doutput=target/pom-effective.xml
+                BUILD=$(awk -F '[<>]' '/Implementation-Built/{print $3;exit;}' target/pom-effective.xml)
+                echo "BUILD=$BUILD" >> extravars.properties
+            '''
+        }
+        script {
+            env.VERSION = readMavenPom().getVersion()
+            pom = readMavenPom(file: 'target/pom-effective.xml')
+            projectArtifactId = pom.getArtifactId()
+            projectGroupId = pom.getGroupId()
+            projectVersion = pom.getVersion()
+            projectName = pom.getName()
+            def props = readProperties file: 'extravars.properties'
+            env.BUILD = props.BUILD
+        }
+        echo("VERSION=${VERSION}")
+        echo "Building ${projectName}:${projectVersion}"
+        echo "BUILD ${BUILD}"
+      }
+    }
+
+    stage('ОТПРАВКА АРТЕФАКТОВ В NEXUS') {
+        when {
+            expression {
+              params.DEPLOYMENT == 'TIS-WILDFLY'
+            }
+        }
+        agent {
+            label "master"
+        }
+        steps {
+          withEnv(["GROUP=${params.GROUP}", "APPLICATION=${env.APPLICATION}", "VERSION=${env.BUILD}"]) {
+              withCredentials([usernamePassword(credentialsId: 'nexus_tis', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+                sh 'curl -u $USERNAME:$PASSWORD --upload-file $WORKSPACE/target/*.war https://nexus.admhmao.ru/repository/deployments/${GROUP}/${APPLICATION}/${APPLICATION}_${VERSION}.war'
+              }
+          }
+        }
+    }
+
+    stage('ДЕПЛОЙ НА WEBLOGIC В ТЕХНОКОМЕ') {
+       agent { label "master" }
+       when {
+           expression { params.DEPLOYMENT == 'SLHWL' }
+       }
+       environment {
+         HOST = 'slhwl.technocom.tech'
+         APP = 'eservice-tis-api'
+       }
+       steps {
+         sshagent(credentials: ['SLHWL']) {
+           withEnv(["SERVER=${params.SERVER}", "HOST=${env.HOST}", "APPLICATION=${env.APP}", "VERSION=${env.BUILD}", "VERSION_UNDEPLOY=${params.VERSION_UNDEPLOY}"]) {
+             withCredentials([usernamePassword(credentialsId: 'WEBLOGIC_SLHWL', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+               sh("""
+                 ssh-keyscan -H '${HOST}' >> ~/.ssh/known_hosts
+                 ssh-keyscan ${HOST} | sort -u - ~/.ssh/known_hosts -o ~/.ssh/known_hosts
+
+                 scp  $WORKSPACE/target/${APPLICATION}.war fga@${HOST}:D:/Deployments/${SERVER}/${APPLICATION}/${APPLICATION}_${VERSION}.war
+
+                 ssh fga@${HOST} 'cmd \\c' << EOF
+                 set CLASSPATH=C:\\Apps\\WLS\\wlserver\\server\\lib\\weblogic.jar
+                 java weblogic.Deployer -adminurl t3://${HOST}:7001 -username $USERNAME -password $PASSWORD -name ${APPLICATION} -targets ${SERVER} -undeploy -appversion ${VERSION_UNDEPLOY}
+                 java weblogic.Deployer -adminurl t3://${HOST}:7001 -username $USERNAME -password $PASSWORD -name ${APPLICATION} -targets ${SERVER} -stage -deploy D:\\Deployments\\${SERVER}\\${APPLICATION}\\${APPLICATION}_${VERSION}.war -appversion ${VERSION}
+                 exit
+                 EOF
+               """)
+             }
+           }
+         }
+         script {
+            if (params.DELETE_ARTIFACT) {
+              sshagent(credentials: ['SLHWL']) {
+                withEnv(["SERVER=${params.SERVER}", "HOST=${env.HOST}", "APPLICATION=${env.APP}", "VERSION=${params.VERSION_UNDEPLOY}"]) {
+                  withCredentials([usernamePassword(credentialsId: 'WEBLOGIC_SLHWL', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+                    sh("""
+                      ssh-keyscan -H '${HOST}' >> ~/.ssh/known_hosts
+                      ssh-keyscan ${HOST} | sort -u - ~/.ssh/known_hosts -o ~/.ssh/known_hosts
+                       ssh fga@${HOST} 'cmd \\c' << EOF
+                       chcp 1251
+                       del D:\\Deployments\\${SERVER}\\${APPLICATION}\\${APPLICATION}_${VERSION}.war
+                       exit
+                       EOF
+                    """)
+                  }
+                }
+              }
+            }
+         }
+      }
+    }
+
+    stage('ДЕПЛОЙ ПРИЛОЖЕНИЯ В ТИС') {
+      when {
+          expression { params.DEPLOYMENT == 'TIS-WEBLOGIC' }
+      }
+      environment {
+        HOST = 'unoln3.hmao.ugra'
+      }
+      parallel {
+        stage('деплой на weblogic') {
+          agent { label "master" }
+            steps {
+                sshagent(credentials: ['SSH-TIS-KEY']) {
+                  withEnv(["HOST=${env.HOST}", "CLUSTER=${params.CLUSTER}", "APPLICATION=${env.APPLICATION}", "VERSION=${env.BUILD}"]) {
+                    withCredentials([usernamePassword(credentialsId: 'WEBLOGIC_HMAO', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+                      sh("""
+                        ssh-keyscan -H '${HOST}' >> ~/.ssh/known_hosts
+                        ssh-keyscan ${HOST} | sort -u - ~/.ssh/known_hosts -o ~/.ssh/known_hosts
+
+                        scp $WORKSPACE/target/${APPLICATION}.war fga@${HOST}:D:/Deployments/${CLUSTER}/${APPLICATION}_${VERSION}.war
+
+                        ssh fga@${HOST} 'cmd \\c' << EOF
+                        set CLASSPATH=C:\\Apps\\WLS\\wlserver\\server\\lib\\weblogic.jar
+                        java weblogic.Deployer -adminurl t3://${HOST}:7001 -username $USERNAME -password $PASSWORD -name ${APPLICATION} -targets ${CLUSTER} -undeploy -appversion ${VERSION_UNDEPLOY}
+                        java weblogic.Deployer -adminurl t3://${HOST}:7001 -username $USERNAME -password $PASSWORD -name ${APPLICATION} -targets ${CLUSTER} -stage -deploy D:\\Deployments\\${CLUSTER}\\${APPLICATION}_${VERSION}.war -appversion ${VERSION}
+                        exit
+                        EOF
+                      """)
+                    }
+                  }
+                }
+              }
+          }
+          stage('удаление артефактов на ФС') {
+            agent { label "master" }
+            when {
+              expression { params.DELETE_ARTIFACT == true }
+            }
+            steps {
+                sshagent(credentials: ['SSH-TIS-KEY']) {
+                  withEnv(["HOST=${env.HOST}", "CLUSTER=${params.CLUSTER}", "APPLICATION=${env.APPLICATION}", "VERSION=${params.VERSION_UNDEPLOY}"]) {
+                    withCredentials([usernamePassword(credentialsId: 'WEBLOGIC_HMAO', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+                      sh("""
+                        ssh-keyscan -H '${HOST}' >> ~/.ssh/known_hosts
+                        ssh-keyscan ${HOST} | sort -u - ~/.ssh/known_hosts -o ~/.ssh/known_hosts
+                        ssh fga@${HOST} 'cmd \\c del D:/Deployments/${CLUSTER}/${APPLICATION}_${VERSION}.war'
+                      """)
+                    }
+                  }
+                }
+              }
+          }
+      }
+    }
+
+    stage('ДЕПЛОЙ НА WILDFLY В ТИС') {
+      when {
+          expression { params.DEPLOYMENT == 'TIS-WILDFLY' }
+      }
+      parallel {
+        stage('деплой на wildfly') {
+            agent {
+              docker {
+                image 'artifactory.technocom.tech/common/ansible-nfs-curl:2.10'
+                registryUrl 'https://artifactory.technocom.tech'
+                registryCredentialsId 'artifactory'
+                args '-v $WORKSPACE:/ansible -u 0:0 --privileged'
+                label "master"
+              }
+            }
+            steps {
+              withEnv(["GROUP=${params.GROUP}", "APPLICATION=${env.APPLICATION}", "VERSION=${env.BUILD}"]) {
+                  sshagent(credentials : ['SSH-KEY-TIS']) {
+                    sh '''
+                      echo "wildfly ansible_host=10.40.225.80 ansible_port=22 ansible_user=root ansible_ssh_extra_args='-o StrictHostKeyChecking=no'" > inventory
+                      echo "10.40.225.135 nexus.admhmao.ru" >> /etc/hosts
+                      curl -L https://nexus.admhmao.ru/repository/deployments/CICD/deploy-wildfly-domain-nexus.yml -o deploy-wildfly-domain-nexus.yml
+                      ansible-playbook -i inventory deploy-wildfly-domain-nexus.yml --extra-vars "SERVER=${GROUP} APPLICATION=${APPLICATION} VERSION=${VERSION}"
+                    '''
+                  }
+               }
+            }
+        }
+        stage('удаление артефактов из nexus') {
+            when {
+                expression { params.DELETE_ARTIFACT == true }
+            }
+            agent { label "master" }
+            steps {
+              withEnv(["GROUP=${params.GROUP}", "APPLICATION=${env.APPLICATION}", "VERSION=${params.VERSION_UNDEPLOY}"]) {
+                  withCredentials([usernamePassword(credentialsId: 'nexus_tis', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+                    sh 'curl --request DELETE -u $USERNAME:$PASSWORD https://nexus.admhmao.ru/repository/deployments/${GROUP}/${APPLICATION}/${APPLICATION}_${VERSION}.war'
+                  }
+              }
+            }
+        }
+      }
+    }
+
+  }
+
+  post {
+    always {
+      deleteDir()
+    }
+  }
+
+}

@@ -1,0 +1,44 @@
+# Operating System Files
+
+*.DS_Store
+Thumbs.db
+*.sw?
+.#*
+*#
+*~
+*.sublime-*
+
+#git, kdiff3
+*.orig
+*.BASE.*
+*.BACKUP.*
+*.LOCAL.*
+*.REMOTE.*
+
+
+# Build Artifacts
+
+.gradle/
+target/
+
+# Eclipse Project Files
+
+.classpath
+.project
+.settings/
+
+# IntelliJ IDEA Files
+.idea/
+*.iml
+*.ipr
+*.iws
+*.idea
+*.eml
+#*.xml
+
+# Log files
+*.log
+
+# Python
+
+*.pyc

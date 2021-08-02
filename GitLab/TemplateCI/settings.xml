@@ -1,0 +1,54 @@
+<?xml version="1.0"?>
+<settings>
+    <profiles>
+        <profile>
+            <id>nexus</id>
+            <!-- добавляем Nexus как обычный репозиторий -->
+            <!-- т.к. он добавляется первым, то запросы будут отправлятся в начале к nexus -->
+            <repositories>
+                <repository>
+                    <id>nexus-repo</id>
+                    <name>Nexus Repository</name>
+                    <url>https://repo.technocom.tech/repository/maven-public</url>
+                    <releases>
+                        <enabled>true</enabled>
+                    </releases>
+                    <snapshots>
+                        <enabled>true</enabled>
+                    </snapshots>
+                </repository>
+            </repositories>
+            <pluginRepositories>
+                <pluginRepository>
+                    <id>nexus-repo</id>
+                    <name>Nexus Repository</name>
+                    <url>https://repo.technocom.tech/repository/maven-public</url>
+                    <releases>
+                        <enabled>true</enabled>
+                    </releases>
+                    <snapshots>
+                        <enabled>true</enabled>
+                    </snapshots>
+                </pluginRepository>
+            </pluginRepositories>
+        </profile>
+    </profiles>
+    <activeProfiles>
+        <!--делаем профиль активным по умолчанию -->
+        <activeProfile>nexus</activeProfile>
+    </activeProfiles>
+    
+    <servers>
+        <!-- логин/пароль для установки своих библиотек в nexus -->
+        <server>
+            <id>InternalReleases</id>
+            <username>username</username>
+            <password>password</password>
+        </server>  
+        <server>
+            <id>InternalSnapshots</id>
+            <username>username</username>
+            <password>password</password>
+        </server>
+    </servers> 
+</settings>
